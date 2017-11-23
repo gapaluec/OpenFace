@@ -149,6 +149,7 @@ void get_video_input_output_params(vector<string> &input_video_files, vector<str
 		else if (arguments[i].compare("-of") == 0)
 		{
 			output_files.push_back(output_root + arguments[i + 1]);
+			printf("-of %s\n", arguments[i + 1]);
 			create_directory_from_file(output_root + arguments[i + 1]);
 			valid[i] = false;
 			valid[i+1] = false;
@@ -812,8 +813,98 @@ void Project(cv::Mat_<double>& dest, const cv::Mat_<double>& mesh, double fx, do
 
 }
 
+
+bool DrawAxis(cv::Mat image, cv::Vec6d pose, cv::Scalar color, int thickness, float fx, float fy, float cx, float cy, cv::Point &pt)
+{
+	double axisVerts[] = {0,0,0,1,0,0,0,1,0,0,0,-1};
+	vector<std::pair<int,int>> axis_edges;
+	//axis_edges.push_back(pair<int,int>(0,1));
+	//axis_edges.push_back(pair<int,int>(0,2));
+	axis_edges.push_back(pair<int,int>(0,3));
+	cv::Mat_<double> axis = cv::Mat(4, 3, CV_64F, axisVerts).clone() * 100;
+
+	cv::Matx33d rot = LandmarkDetector::Euler2RotationMatrix(cv::Vec3d(pose[3], pose[4], pose[5]));
+	cv::Mat_<double> rotAxis;
+	
+	// Rotate the box
+	rotAxis = cv::Mat(rot) * axis.t();
+	rotAxis = rotAxis.t();
+
+	// Move the bounding box to head position
+	rotAxis.col(0) = rotAxis.col(0) + pose[0];
+	rotAxis.col(1) = rotAxis.col(1) + pose[1];
+	rotAxis.col(2) = rotAxis.col(2) + pose[2];
+
+	// ray: points rotAxis.row(0) and rotAxis.row(3)
+	// plane z+z1=0
+	// printf("pose: %f, %f, %f, %f, %f, %f\n",pose[0], pose[1], pose[2], pose[3], pose[4], pose[5]);
+	// printf("point1: %f, %f, %f\n", rotAxis(0,0),rotAxis(0,1),rotAxis(0,2));
+	// printf("point2: %f, %f, %f\n", rotAxis(3,0),rotAxis(3,1),rotAxis(3,2));
+	//Plance equation z+z1=0
+	float z1=-1.0;
+	cv::Mat_<double> diff = rotAxis.row(3) - rotAxis.row(0); // a b c : parametric value
+	float t = -((rotAxis(0,2)+z1)/diff(2));
+	/*double intPoint[3];
+	intPoint[0]= rotAxis(0,0)+diff(0)*t +cx/2.0;
+	intPoint[1]= rotAxis(0,1)+diff(1)*t +cy/2.0;
+	intPoint[2]= rotAxis(0,2)+diff(2)*t +pose[2];
+	cv::Mat_<double> intPointMat = cv::Mat(1, 3, CV_64F, intPoint).clone();
+	printf("intPoint: %f, %f, %f\n", intPointMat(0,0),intPointMat(0,1),intPointMat(0,2));
+	cv::Mat_<double> intPointProj;
+	Project(intPointProj, intPointMat, fx, fy, cx, cy);
+	cv::Point p0(cvRound(intPointProj.at<double>(0) * (double)draw_multiplier), cvRound(intPointProj.at<double>(1) * (double)draw_multiplier));
+	cv::circle(image, p0, 30, cv::Scalar(0, 255, 0), 10, CV_AA, draw_shiftbits);	*/
+	//cv::Point p00(cvRound(intPointMat.at<double>(0) * (double)draw_multiplier), cvRound(intPointMat.at<double>(1) * (double)draw_multiplier));
+	//cv::circle(image, p00, 30, cv::Scalar(100, 100, 100), 10, CV_AA, draw_shiftbits);	
+	// printf("intPoint2D: %d, %d\n", p0.x, p0.y);
+	
+	double intPoint2[3];
+	intPoint2[0]= rotAxis(0,0)+diff(0)*t;// +pose[0];
+	intPoint2[1]= rotAxis(0,1)+diff(1)*t;// +pose[1];
+	intPoint2[2]= rotAxis(0,2)+diff(2)*t +pose[2];
+	cv::Mat_<double> intPoint2Mat = cv::Mat(1, 3, CV_64F, intPoint2).clone();
+	// printf("intPoint2: %f, %f, %f\n", intPoint2Mat(0,0),intPoint2Mat(0,1),intPoint2Mat(0,2));
+	cv::Mat_<double> intPoint2Proj;
+	Project(intPoint2Proj, intPoint2Mat, fx, fy, cx, cy);
+	// printf("Intersection point: %f, %f, %f\n", intPoint2Proj(0,0),intPoint2Proj(0,1),intPoint2Proj(0,2));
+	cv::Point p01(cvRound(intPoint2Proj.at<double>(0) * (double)draw_multiplier), cvRound(intPoint2Proj.at<double>(1) * (double)draw_multiplier));
+	cv::circle(image, p01, 30, cv::Scalar(255, 0, 0), 10, CV_AA, draw_shiftbits);
+	pt=cv::Point(cvRound(intPoint2Mat(0,0)), cvRound(intPoint2Mat(0,1)));
+	cv::Mat_<double> rotBoxProj;
+	Project(rotBoxProj, rotAxis, fx, fy, cx, cy);
+	cv::Rect image_rect(0,0,image.cols * draw_multiplier, image.rows * draw_multiplier);
+	
+
+	/*for (size_t i = 0; i < axis_edges.size(); ++i)
+	{
+		cv::Mat_<double> begin;
+		cv::Mat_<double> end;
+	
+		rotBoxProj.row(axis_edges[i].first).copyTo(begin);
+		rotBoxProj.row(axis_edges[i].second).copyTo(end);
+
+
+		cv::Point p1(cvRound(begin.at<double>(0) * (double)draw_multiplier), cvRound(begin.at<double>(1) * (double)draw_multiplier));
+		cv::Point p2(cvRound(end.at<double>(0) * (double)draw_multiplier), cvRound(end.at<double>(1) * (double)draw_multiplier));
+		
+		// Only draw the line if one of the points is inside the image
+		if(p1.inside(image_rect) || p2.inside(image_rect))
+		{
+			cv::line(image, p1, p2, color, thickness, CV_AA, draw_shiftbits);
+		}
+		
+	}*/
+
+	if(p01.inside(image_rect))
+		return true;
+
+	return false;
+
+}
+
 void DrawBox(cv::Mat image, cv::Vec6d pose, cv::Scalar color, int thickness, float fx, float fy, float cx, float cy)
 {
+
 	double boxVerts[] = {-1, 1, -1,
 						1, 1, -1,
 						1, 1, 1,

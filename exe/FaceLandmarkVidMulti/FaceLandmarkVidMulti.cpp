@@ -35,9 +35,11 @@
 
 // FaceTrackingVidMulti.cpp : Defines the entry point for the multiple face tracking console application.
 #include "LandmarkCoreIncludes.h"
-
+#include "GazeEstimation.h"
 #include <fstream>
 #include <sstream>
+#include <chrono>
+#include <string>
 
 // OpenCV includes
 #include <opencv2/videoio/videoio.hpp>  // Video write
@@ -101,13 +103,72 @@ void NonOverlapingDetections(const vector<LandmarkDetector::CLNF>& clnf_models, 
 	}
 }
 
+
+void prepareOutputFile(std::ofstream* output_file, bool output_pose)
+{
+ // INFO_STREAM("************** output file :" << output_file);
+
+	*output_file << "frame";
+
+
+	if (output_pose)
+	{
+		*output_file << ", pose_Tx, pose_Ty, pose_Tz, pose_Rx, pose_Ry, pose_Rz, Bbox";
+	}
+
+
+
+	*output_file << endl;
+
+}
+
+
+
+// Output all of the information into one file in one go (quite a few parameters, but simplifies the flow)
+void outputAllFeatures_1(std::ofstream* output_file, bool output_pose,
+	int frame_count, const cv::Vec6d& pose_estimate, double fx, double fy, double cx, double cy,
+ cv::Rect_<double> temp_fd)
+{
+
+	// double confidence = 0.5 * (1 - face_model.detection_certainty);
+	*output_file << frame_count + 1;// << ", " << detection_success;
+
+	// Output the estimated head pose
+	if (output_pose)
+	{
+		if(true)
+		{
+			*output_file << ", " << pose_estimate[0] << ", " << pose_estimate[1] << ", " << pose_estimate[2]
+				<< ", " << pose_estimate[3] << ", " << pose_estimate[4] << ", " << pose_estimate[5] << ", ";
+		}
+		else
+		{
+			*output_file << ", 0, 0, 0, 0, 0, 0";
+		}
+	}
+ *output_file << temp_fd;
+
+	*output_file << endl;
+}
+
+void outputAllFeatures_2(std::ofstream* output_file, int frame_count, cv::Point pt)
+{
+
+	// double confidence = 0.5 * (1 - face_model.detection_certainty);
+	*output_file << frame_count + 1;// << ", " << detection_success;
+	*output_file << ", " << pt.x << ", " << pt.y;
+	// printf("%d, %d\n",pt.x,pt.y );
+	*output_file << endl;
+}
+
+
 int main (int argc, char **argv)
 {
 
 	vector<string> arguments = get_arguments(argc, argv);
 
 	// Some initial parameters that can be overriden from command line	
-	vector<string> files, tracked_videos_output, dummy_out;
+	vector<string> files, tracked_videos_output, dummy_out, output_files;
 	
 	// By default try webcam 0
 	int device = 0;
@@ -127,7 +188,7 @@ int main (int argc, char **argv)
 
 	// Get the input output file parameters
 	string output_codec;
-	LandmarkDetector::get_video_input_output_params(files, dummy_out, tracked_videos_output, output_codec, arguments);
+	LandmarkDetector::get_video_input_output_params(files, output_files, tracked_videos_output, output_codec, arguments);
 	// Get camera parameters
 	LandmarkDetector::get_camera_params(device, fx, fy, cx, cy, arguments);
 	
@@ -135,7 +196,7 @@ int main (int argc, char **argv)
 	vector<LandmarkDetector::CLNF> clnf_models;
 	vector<bool> active_models;
 
-	int num_faces_max = 4;
+	int num_faces_max = 10;
 
 	LandmarkDetector::CLNF clnf_model(det_parameters[0].model_location);
 	clnf_model.face_detector_HAAR.load(det_parameters[0].face_detector_location);
@@ -157,13 +218,18 @@ int main (int argc, char **argv)
 	bool done = false;	
 	int f_n = -1;
 
+	// flip image of captured from device
+	bool capturedFromDevice = false;	
+
 	// If cx (optical axis centre) is undefined will use the image size/2 as an estimate
 	bool cx_undefined = false;
 	if(cx == 0 || cy == 0)
 	{
 		cx_undefined = true;
 	}		
-	
+	// for face_detection bbox
+ 	cv::Rect_<double>  temp_fd;
+	int gaze_count = 0;
 	while(!done) // this is not a for loop as we might also be reading from a webcam
 	{
 		
@@ -189,8 +255,11 @@ int main (int argc, char **argv)
 			video_capture = cv::VideoCapture( device );
 
 			// Read a first frame often empty in camera
+			
 			cv::Mat captured_image;
 			video_capture >> captured_image;
+			capturedFromDevice = true;
+
 		}
 
 		if (!video_capture.isOpened())
@@ -199,11 +268,10 @@ int main (int argc, char **argv)
 			return 1;
 		}
 		else INFO_STREAM( "Device or file opened");
-
+		cv::Mat image_unflipped;
 		cv::Mat captured_image;
 		video_capture >> captured_image;		
 		
-
 		// If optical centers are not defined just use center of image
 		if(cx_undefined)
 		{
@@ -230,7 +298,15 @@ int main (int argc, char **argv)
 		// For measuring the timings
 		int64 t1,t0 = cv::getTickCount();
 		double fps = 10;
-
+		bool looking_at_screen = true;
+		int num_faces_looking = 0;
+		// Creating output files
+		std::ofstream output_file;
+		bool output_pose = true;
+		
+		auto now_sec_str = std::to_string(long(std::time(nullptr)));
+		output_file.open(now_sec_str + ".txt");
+		prepareOutputFile(&output_file, output_pose);
 
 		INFO_STREAM( "Starting tracking");
 		while(!captured_image.empty())
@@ -341,7 +417,7 @@ int main (int argc, char **argv)
 				// Only draw if the reliability is reasonable, the value is slightly ad-hoc
 				if(detection_certainty < visualisation_boundary)
 				{
-					LandmarkDetector::Draw(disp_image, clnf_models[model]);
+					// LandmarkDetector::Draw(disp_image, clnf_models[model]);
 
 					if(detection_certainty > 1)
 						detection_certainty = 1;
@@ -357,7 +433,28 @@ int main (int argc, char **argv)
 					cv::Vec6d pose_estimate = LandmarkDetector::GetPose(clnf_models[model], fx, fy, cx, cy);
 					
 					// Draw it in reddish if uncertain, blueish if certain
-					LandmarkDetector::DrawBox(disp_image, pose_estimate, cv::Scalar((1-detection_certainty)*255.0,0, detection_certainty*255), thickness, fx, fy, cx, cy);
+					// LandmarkDetector::DrawBox(disp_image, pose_estimate, cv::Scalar((1-detection_certainty)*255.0,0, detection_certainty*255), thickness, fx, fy, cx, cy);
+					cv::Point pt;
+					looking_at_screen = LandmarkDetector::DrawAxis(disp_image, pose_estimate, cv::Scalar((1-detection_certainty)*255.0,0, detection_certainty*255), thickness, fx, fy, cx, cy, pt);
+					if(looking_at_screen)
+					{
+						num_faces_looking+=1;
+						outputAllFeatures_2(&output_file, frame_count, pt);
+					}
+					else
+					{
+						outputAllFeatures_2(&output_file, frame_count, cv::Point(0,0));	
+					}
+
+					
+					if(det_parameters[0].track_gaze && clnf_models[model].eye_model)
+					{
+						cv::Point3f gazeDirection0(0,0,-1);
+						cv::Point3f gazeDirection1(0,0,-1);
+						FaceAnalysis::EstimateGaze(clnf_models[model], gazeDirection0, fx, fy, cx, cy, true);
+						FaceAnalysis::EstimateGaze(clnf_models[model], gazeDirection1, fx, fy, cx, cy, false);
+						FaceAnalysis::DrawGazeMod(disp_image, clnf_models[model], gazeDirection0, gazeDirection1, fx, fy, cx, cy, 16.0);
+					}
 				}
 			}
 
@@ -392,9 +489,16 @@ int main (int argc, char **argv)
 			active_models_st += active_m_C;
 			cv::putText(disp_image, active_models_st, cv::Point(10,60), CV_FONT_HERSHEY_SIMPLEX, 0.5, CV_RGB(255,0,0), 1, CV_AA);
 			
+			char face_looking_C[255];
+			sprintf(face_looking_C, "%d", num_faces_looking);
+			string face_looking_st("models looking at screen:");
+			face_looking_st += face_looking_C;
+			cv::putText(disp_image, face_looking_st, cv::Point(10,100), CV_FONT_HERSHEY_SIMPLEX, 0.5, CV_RGB(255,0,0), 1, CV_AA);
+			num_faces_looking=0;
+
 			if(!det_parameters[0].quiet_mode)
 			{
-				cv::namedWindow("tracking_result",1);
+				cv::namedWindow("tracking_result",cv::WINDOW_NORMAL);
 				cv::imshow("tracking_result", disp_image);
 			}
 
@@ -404,8 +508,33 @@ int main (int argc, char **argv)
 				writerFace << disp_image;
 			}
 
-			video_capture >> captured_image;
-		
+			video_capture >> captured_image;		
+			if(capturedFromDevice)
+			{
+				cv::Mat image_flipped;
+				cv::flip(captured_image, image_flipped, 1);
+				image_flipped.copyTo(captured_image);
+				image_flipped.release();
+			}
+			cv::Mat lab_image;
+    		cv::cvtColor(captured_image, lab_image, CV_BGR2Lab);
+			// Extract the L channel
+		    std::vector<cv::Mat> lab_planes(3);
+		    cv::split(lab_image, lab_planes);  // now we have the L image in lab_planes[0]
+
+		    // apply the CLAHE algorithm to the L channel
+		    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE();
+		    clahe->setClipLimit(4);
+		    cv::Mat dst;
+		    clahe->apply(lab_planes[0], dst);
+
+		    // Merge the the color planes back into an Lab image
+		    dst.copyTo(lab_planes[0]);
+		    cv::merge(lab_planes, lab_image);
+
+		   // convert back to RGB
+		   cv::cvtColor(lab_image, captured_image, CV_Lab2BGR);
+			
 			// detect key presses
 			char character_press = cv::waitKey(1);
 			

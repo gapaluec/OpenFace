@@ -83,6 +83,7 @@ namespace LandmarkDetector
 	// Visualisation functions
 	//===========================================================================
 	void Project(cv::Mat_<double>& dest, const cv::Mat_<double>& mesh, double fx, double fy, double cx, double cy);
+	bool DrawAxis(cv::Mat image, cv::Vec6d pose, cv::Scalar color, int thickness, float fx, float fy, float cx, float cy, cv::Point &pt);
 	void DrawBox(cv::Mat image, cv::Vec6d pose, cv::Scalar color, int thickness, float fx, float fy, float cx, float cy);
 
 	// Drawing face bounding box
